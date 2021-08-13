@@ -1,1 +1,170 @@
-pass
+
+# 按照网页来获取大类，形成文件夹，然后在去修改数字，获取每一个图集，最后获取
+# 返回404即为结束
+import gc
+import os
+import re
+import socket
+import sys
+import time
+import requests
+import urllib3
+from bs4 import BeautifulSoup
+from lxml import etree
+from concurrent.futures import ThreadPoolExecutor
+
+from retry import retry
+
+
+@retry(exceptions=(
+TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout),
+       tries=10,delay=5)
+def shouye(k):
+    global wj  # 必须在这里声明全局变量，不能在内部函数中遇到一次声明一次
+
+    url1 = url + f'.html'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.64'
+    }
+    resp1 = requests.get(url1, headers=headers, timeout=6)
+    resp1.encoding = 'utf-8'
+    if resp1.status_code == 404:
+        print('当前网址不存在', k)
+        str(k)
+        with open('C:/chucuo/' + '404网址' + '.txt', mode='a+') as bucunzai:
+            bucunzai.write(f'当前网址不存在：{k}')
+        return
+
+    try:
+        tu_l = re.compile(r'<div class="text-center mb-4"><a href=".*?">.*?<img.*?src="(?P<lj>.*?)".*?</div>',
+                          re.S)  # 正则提取图片下载地址
+        tu = tu_l.finditer(resp1.text)
+        tuming = etree.HTML(resp1.text).xpath('/html/body/div[2]/h1/text()')  # 获取图片名字
+        tuming_s = str(tuming).replace('\\', '-').replace('/', '-').replace(':', '-').replace('*', '-').replace('?',
+                                                                                                                '-').replace(
+            '\"', '-').replace('<', '-').replace('>', '-').replace('|', '-')
+        print('当前正在爬取' + tuming_s)
+        for i in tu:
+            print(i.group('lj'))
+        # 下载链接
+        tu0 = requests.get(i.group('lj'), headers=headers, timeout=6).content  # 获取图片字节文件
+        os.mkdir(f'C:/tuce/{tuming_s}+{k}/')
+        wj = f'C:/tuce/{tuming_s}+{k}/'  # 把文件夹名定义为全局变量，让qiyuye函数使用
+        with open(wj + tuming_s + '.jpg', mode='wb') as f:  # 为了防止转义，python可以使用/表示win路径
+            f.write(tu0)
+        time.sleep(0.3)
+    except(TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError,
+           requests.exceptions.ReadTimeout):
+        raise
+    except:
+        print("当前图集未爬取到" + tuming_s)
+        os.mkdir(f'C:/tuce/{tuming_s}+{k}/')
+        wj = f'C:/tuce/{tuming_s}+{k}/'
+        with open(f'C:/tuce/{tuming_s}+{k}/' + tuming_s + '.txt', mode='a+') as cuo:
+            cuo.write(f'当前首页未爬取到{tuming_s},当前数字：{k}')
+        with open(f'C:/chucuo/' + tuming_s + str(k) + '.txt', mode='a+') as cuo2:
+            cuo2.write(f'当前首页未爬取到{tuming_s},当前数字：{k}')
+
+    finally:
+        resp1.close()
+
+
+@retry(exceptions=(
+TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout),
+       tries=10,delay=5)
+def huoqutu(a,head,tuming):
+    tu0_22 = requests.get(a, headers=head, timeout=6).content  # 获取图片字节文件
+    with open(wj + tuming + '.jpg', mode='wb') as f:  # 为了防止转义，python可以使用/表示win路径
+        f.write(tu0_22)
+
+
+
+
+@retry(exceptions=(
+TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout),
+       tries=10,delay=5)
+def qiyu(yeshu, k):
+    global wj
+    try:
+        print('准备爬取')
+        url2 = url + f'_{yeshu}.html'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.64'
+        }
+        resp2 = requests.get(url2, headers=headers, timeout=10)
+        resp2.encoding = 'utf-8'
+        print('已获取网页')
+        if resp2.status_code == 404:
+            return 123
+
+        tu_l22 = re.compile(r'<div class="text-center mb-4"><a href=".*?">.*?<img.*?src="(?P<lj>.*?)".*?</div>',
+                            re.S)  # 正则提取图片下载地址
+        tu22 = tu_l22.finditer(resp2.text)
+
+        tuming = etree.HTML(resp2.text).xpath('/html/body/div[2]/h1/text()')  # 获取图片名字
+        tuming_s = str(tuming).replace('\\', '-').replace('/', '-').replace(':', '-').replace('*', '-').replace('?',
+                                                                                                                '-').replace(
+            '\"', '-').replace('<', '-').replace('>', '-').replace('|', '-')
+        print('当前正在爬取' + tuming_s)
+
+        for i in tu22:
+            print(i.group('lj'))
+        # 下载链接
+        try:
+            try:
+                huoqutu(a=i.group('lj'),head=headers,tuming=tuming_s)   #防止网站的服务器超时
+            except(TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError,
+               requests.exceptions.ReadTimeout):
+                with open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+                    tupianmeishuju.write(f'当前图片已无法找到数据--{tuming_s}')
+                    print(f'当前图片已无法找到数据--{tuming_s}')
+
+        except(TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError,
+               requests.exceptions.ReadTimeout):
+            raise  # 向上抛出超时异常，好让retry生效
+
+        except:
+            with open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+                tupianmeishuju.write(f'当前图片已无法找到数据--{tuming_s}')
+                print(f'当前图片已无法找到数据--{tuming_s}')
+
+        resp2.close()
+    except(TimeoutError, socket.timeout, UnboundLocalError, urllib3.exceptions.ReadTimeoutError,
+           requests.exceptions.ReadTimeout):
+        raise
+    except:
+        with open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+            tupianmeishuju.write(f'当前图片已无法找到数据--{tuming_s}')
+            print(f'当前图片已无法找到数据--{tuming_s}')
+
+    time.sleep(0.3)
+
+
+
+def qiyuye(k):
+    global wj
+
+    for yeshu in range(2, 800):
+        if qiyu(yeshu, k) == 123:  # 调用的同时做出判断，若返回123，则证明可以结束循环了
+            break
+
+
+def xh(k):
+    global url
+    url = f'https://xxxxx/{k}'
+    print('当前数字是' + str(k))
+    shouye(k)
+    qiyuye(k)
+    print('爬取完毕')
+    gc.collect()  # 清理内存
+
+
+if __name__ == '__main__':
+    global wj
+
+    global url
+    k = 1
+    while k < 9000:
+        xh(k)
+        k = k + 1
+
