@@ -1,0 +1,204 @@
+#可能是程序执行太快，电脑性能跟不上，有些io操作会被跳过，但程序不会报错，此问题待解决
+# 对xh进行线程，就不能对shouye和qiyu再使用线程限制。不对他们使用线程限制，那么他们的访问网址行为会在当前线程运行，如果对他们使用线程限制，那么他们就会开启新的线程去运行，又因为qiyu处在shouye线程中，若shouye线程没结束，那么qiyu就得不到线程，但要想shouye结束，又必须运行qiyu才行，就会导致程序永远处于等待当中。协程同理
+#若要在shouye和qiyu内部使用限制，就必须在调用qiyu前解除限制
+import os
+import re
+import socket
+import asyncio
+import sys
+
+from aiohttp import ClientConnectorError
+from lxml import etree
+
+import aiofiles
+import aiohttp
+import requests
+from retry import retry
+
+sem = asyncio.Semaphore(20)  #利用信号量来控制线程数，有两种写法，一种自己写打开关闭，一种使用with系统操作打开关闭
+# 控制并发数为20，若并发数过多，则会导致网络请求量过大，从而导致部分数据超时，也可能因为电脑性能跟不上导致部分io操作被跳过
+
+@retry(exceptions=(
+        asyncio.exceptions.TimeoutError, socket.gaierror, aiohttp.client_exceptions.ClientConnectorError, OSError,
+        ClientConnectorError,
+        socket.timeout), tries=15, delay=5)
+async def shouye(k,url):
+        await sem.acquire()
+        url1 = url + f'.html'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.64'
+        }
+
+        async_timeout = aiohttp.ClientTimeout(total=1000000)
+        await  asyncio.sleep(1)
+        try:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=25, verify_ssl=False), trust_env=True,
+                                             timeout=async_timeout) as session:  # connector为防止ssl报错
+                async with session.get(url=url1, headers=headers) as resp:  # 若因网络问题，则到exceot
+                    bianma = await resp.text(encoding='utf-8')
+                    if resp.status == 404:  # 判断是否当前网址是否存在
+                        print('当前网址不存在', str(k))
+                        async with aiofiles.open('C:/chucuo/benzi/' + '本子404网址' + '.txt', mode='a+') as bucunzai:
+                            await bucunzai.write(f'当前本子网址不存在：{k}' + '\n')
+                            sem.release()
+                        return
+                    try:  # 存在时下载图片
+                        tu_l = re.compile(
+                            r'<div class="text-center mb-4"><a href=".*?">.*?<img.*?src="(?P<lj>.*?)".*?</div>',
+                            re.S)  # 正则提取图片下载地址
+                        tu = tu_l.finditer(bianma)  # 下载地址转为utf-8格式
+
+                        tuming = etree.HTML(bianma).xpath('/html/body/div[2]/h1/text()')  # 获取图片名字
+                        tuming_s = str(tuming).replace('\\', '-').replace('/', '-').replace(':', '-').replace('*',
+                                                                                                              '-').replace(
+                            '?', '-').replace('\"', '-').replace('<', '-').replace('>', '-').replace('|',
+                                                                                                     '-')  # 把不符合命名规范的符号替换掉
+                        print(str(k) + '当前正在爬取' + tuming_s)
+
+                        for i in tu:
+                            print(i.group('lj'))  # 输出图片下载地址，同时可以若有错误可以触发报错，进入except
+
+                        try:#图片链接存在，但数据无法获取，进入except
+                            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=25, verify_ssl=False),
+                                                             trust_env=True,
+                                                             timeout=async_timeout) as sesson2:
+                                async with sesson2.get(url=i.group('lj'), headers=headers) as xiazai:
+                                    zijie = await xiazai.content.read()  # 获取图片字节文件
+                                    os.mkdir(f'C:/benzi/{k}+{tuming_s}/')  # 创建的文件夹如果定义成全局变量，也会导致文件路径变来变去
+                                    wj = f'C:/benzi/{k}+{tuming_s}/'  # 把文件夹名定义为全局变量，让qiyu函数使用
+                                    async with aiofiles.open(wj + tuming_s + '.jpg',
+                                                             mode='wb+') as f:  # 为了防止转义，python可以使用/表示win路径
+                                        await f.write(zijie)
+                            await  asyncio.sleep(0.3)
+                            # 设置了协程并发数后，只要前面的协程没有释放，后面的协程就会一直等待，但是qiyu函数在shouye函数中，qiyu函数不运行，shouye函数的协程就不会释放，所以shouye函数的连接数必须小于限制的并发数，好让qiyu协程函数运行。
+
+                            sem.release() #释放并发控制,若不释放，嵌套的qiyu函数就得不到线程去运行，那么程序就会永远处于等待当中，无法进行下去
+                            await qiyu(k, url, wj)
+                        except:
+                            aaaaa=i.group('lj')
+                            os.mkdir(f'C:/benzi/{k}+{tuming_s}/')
+                            wj = f'C:/benzi/{k}+{tuming_s}/'
+                            with open(f'C:/benzi/{k}+{tuming_s}/' + tuming_s + '.txt', mode='a+') as cuo:
+                                cuo.write(f'当前网址无法访问{tuming_s},当前数字：{k}')
+                            with open(f'C:/chucuo/benzi/' + str(k) + tuming_s + '.txt', mode='a+') as cuo3:
+                                cuo3.write(f'当前网址有问题{aaaaa},当前数字：{k}')
+                            sem.release()  # 释放并发控制
+                            await qiyu(k, url, wj)
+                    except(asyncio.exceptions.TimeoutError, socket.gaierror, aiohttp.client_exceptions.ClientConnectorError,
+                           ClientConnectorError,
+                           OSError, socket.timeout):
+                        raise  # 遇到超时抛出错误，交给retry函数装饰器，重复访问
+                    except:  # 首页图片链接有问题，执行此步骤
+                        print(f"{k}当前首页有问题" + tuming_s)
+                        os.mkdir(f'C:/benzi/{k}+{tuming_s}/')
+                        wj = f'C:/benzi/{k}+{tuming_s}/'
+                        with open(f'C:/benzi/{k}+{tuming_s}/' + tuming_s + '.txt', mode='a+') as cuo:
+                            cuo.write(f'当前首页未爬取到{tuming_s},当前数字：{k}')
+                        with open(f'C:/chucuo/benzi/' + str(k) + tuming_s + '.txt', mode='a+') as cuo2:
+                            cuo2.write(f'当前首页未爬取到{tuming_s},当前数字：{k}')
+                        sem.release()  # 释放并发控制
+                        await qiyu(k, url, wj)
+
+        except (asyncio.exceptions.TimeoutError, socket.gaierror, aiohttp.client_exceptions.ClientConnectorError, OSError,
+                ClientConnectorError,
+                socket.timeout):
+            # 遇到超时抛出错误，交给retry函数装饰器，重复访问
+            raise
+
+
+async def qiyu(k, url, wj):
+    for yeshu in range(2, 800):
+        if await qiyuyehuoqu(yeshu, k, url, wj) == 123:  # 调用的同时做出判断，若返回123，则证明可以结束循环了
+            break
+
+
+@retry(exceptions=(
+        asyncio.exceptions.TimeoutError, socket.gaierror, aiohttp.client_exceptions.ClientConnectorError, OSError,
+        ClientConnectorError,
+        socket.timeout), tries=15, delay=5)
+async def qiyuyehuoqu(yeshu, k, url, wj):
+    async with sem:  #使用with写法控制并发量
+
+        url2 = url + f'_{yeshu}.html'
+        print(url2)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.64'
+        }
+        await  asyncio.sleep(1)
+        async_timeout = aiohttp.ClientTimeout(total=1000000)
+        try:  # 获取不到i.group，进入except，说明图片不存在
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=25, verify_ssl=False), trust_env=True,
+                                             timeout=async_timeout) as session:
+                async with session.get(url=url2, headers=headers) as resp2:
+                    if resp2.status == 404:
+                        return 123  # 设置当404时，返回123
+                    tu_l22 = re.compile(r'<div class="text-center mb-4"><a href=".*?">.*?<img.*?src="(?P<lj>.*?)".*?</div>',
+                                        re.S)  # 正则提取图片下载地址
+                    tu22 = tu_l22.finditer(string=await resp2.text(encoding='utf-8'))
+
+                    tuming = etree.HTML(text=await resp2.text(encoding='utf-8')).xpath(
+                        '/html/body/div[2]/h1/text()')  # 获取图片名字
+                    tuming_s = str(tuming).replace('\\', '-').replace('/', '-').replace(':', '-').replace('*', '-').replace(
+                        '?',
+                        '-').replace(
+                        '\"', '-').replace('<', '-').replace('>', '-').replace('|', '-')  # 替换掉命名时的非法字符
+                    print(str(k) + '当前正在爬取' + tuming_s)
+                    for i in tu22:
+                        print(i.group('lj'))
+
+                    try:  # 图片链接存在，但数据无法获取，进入except，说明图片无法获取
+                        try:  # 若访问图片链接时遇到服务器超时的问题，进入except，说明图片无法获取
+                            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=25, verify_ssl=False),
+                                                             trust_env=True,
+                                                             timeout=async_timeout) as session22:
+                                async with session22.get(url=i.group('lj'), headers=headers) as resp22:
+                                    tu0 = await resp22.content.read()  # 获取图片字节文件
+                                    async with aiofiles.open(wj + tuming_s + '.jpg',
+                                                             mode='wb+') as f:  # 为了防止转义，python可以使用/表示win路径
+                                        await f.write(tu0)
+                        except (
+                                asyncio.exceptions.TimeoutError, socket.gaierror,
+                                aiohttp.client_exceptions.ClientConnectorError, ClientConnectorError,
+                                OSError, socket.timeout):
+                            async with aiofiles.open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+                                await tupianmeishuju.write(f'{k}+当前图片已无法找到数据--{tuming_s}')
+                                print(f'当前图片已无法找到数据--{tuming_s}')
+
+                    except (
+                            asyncio.exceptions.TimeoutError, socket.gaierror,
+                            aiohttp.client_exceptions.ClientConnectorError, ClientConnectorError,
+                            OSError, socket.timeout):
+                        raise
+                    except:
+                        async with aiofiles.open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+                            await tupianmeishuju.write(f'{k}+当前图片已无法找到数据--{tuming_s}')
+                            print(f'当前图片已无法找到数据--{tuming_s}')
+        except (asyncio.exceptions.TimeoutError, socket.gaierror, aiohttp.client_exceptions.ClientConnectorError, OSError,ClientConnectorError,
+                socket.timeout):
+            raise
+        except:
+            async with aiofiles.open(wj + tuming_s + '.txt', mode='a+') as tupianmeishuju:
+                await tupianmeishuju.write(f'{k}+当前图片已无法找到数据--{tuming_s}')
+                print(f'当前图片已无法找到数据--{tuming_s}')
+
+
+async def main():
+    tasks = []
+
+    for k in range(2, 9000):
+        url = f'https://xxxxxxx/{k}'  # 协程的url不能定义为全局变量，否则执行函数的时候，k也变了
+        tasks.append(asyncio.create_task(shouye(k, url)))  # 携程的k不能定义为全局变量，否则执行函数的时候，k也变了
+
+    await asyncio.wait(tasks)
+
+
+
+if __name__ == '__main__':
+    fp = open(r'C:\Users\Administrator\Desktop\shuchu.txt', 'a+')
+    sys.stderr = fp  # 标准输出到fp文件
+    sys.stdout = fp  # 标准错误输出到fp文件
+
+    loop = asyncio.get_event_loop()  # 用asyncio.run会报错，这么写则没问题
+    loop.run_until_complete(main())  # 用asyncio.run会报错，这么写则没问题
+
+    fp.close()
